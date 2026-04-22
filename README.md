@@ -1,4 +1,6 @@
-# Bristol Regional Food Network — Recommendation Subsystem (Task 1)
+# Bristol Regional Food Network 
+
+# Recommendation Subsystem (Task 1)
 
 This repository implements the AI-based recommendation and re-order subsystem
 for the Bristol Regional Food Network digital marketplace. It is one of the
@@ -161,3 +163,124 @@ In line with the module's expectation that students trial and report on
 generative AI use, every prompt and the resulting evaluation is recorded
 in `reports/genai_log.md`. See the technical report for the reflection on
 what worked and what didn't.
+
+# Quality inspection subsystem (Task 2)
+
+This part of the project implements the AI-based quality inspection workflow
+for the Bristol Regional Food Network digital marketplace. It is one of the
+four AI components of the wider group project for the *Advanced Artificial
+Intelligence* module (UFCFUR-15-3, 2025-26).
+
+**Owner:** Yas (Person B) · **Module:** Advanced AI · **Group project**
+
+This repository includes tools for producers to check the quality of fruit and
+vegetables. The `src/quality/` package scores produce quality, assigns grades
+(A, B, or C), updates each producer's inventory, and recommends a next action
+(e.g. sell normally, discount, clearance, or manual review).
+
+## What this subsystem does
+
+At **training** time, CSV rows supply image paths and target scores; at
+**inference**, the model predicts class and scores from the image alone, then
+rule-based grading assigns A/B/C. The main pieces are:
+
+| Component | Purpose |
+|---|---|
+| `assign_grade(color, size, ripeness)` | Grades each item (A, B, or C) using fixed thresholds. |
+| `ProducerInventory.process_inspection(...)` | Updates each producer's stock by grade & saves inspection records. |
+| `src.quality.train` | Trains the model to classify produce condition & predict quality scores. |
+| `src.quality.infer` | Checks one image & returns the predicted class, confidence, scores, & final grade. |
+
+The grading policy in `src/quality/grading.py` checks **C before B** (the
+stricter rule wins):
+
+* Grade `C` if **any** metric is below the C cut-offs (`color < 65`,
+  `size < 70`, `ripeness < 60`).
+* Else grade `B` if **any** metric is below the B cut-offs (`color < 75`,
+  `size < 80`, `ripeness < 70`).
+* Else grade `A`.
+
+## Architecture
+
+```
+            ┌──────────────────────────────────────────────┐
+            │             QualityNet (ResNet18)            │
+            │       class head + 3-score regression head   │
+            └───────────────────┬──────────────────────────┘
+                                │
+                ┌───────────────▼────────────────┐
+                │ quality_breakdown() + thresholds│
+                │ assign_grade() => A / B / C     │
+                └───────────────┬────────────────┘
+                                │
+                ┌───────────────▼─────────────────────────┐
+                │ ProducerInventory.process_inspection()   │
+                │ per-producer stock + action suggestion   │
+                └──────────────────────────────────────────┘
+```
+
+Training uses labelled examples: the vision model predicts **class** and **three
+quality scores**; those scores are clipped to 0–100 at inference
+(`src/quality/infer.py`). The A/B/C grade always comes from the fixed rules in
+`assign_grade(...)` so outcomes stay easy to audit.
+
+## Quick start (quality pipeline)
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Train the quality model
+python -m src.quality.train \
+  --train_csv data/quality_train.csv \
+  --val_csv data/quality_val.csv \
+  --image_root data/images \
+  --epochs 10 \
+  --batch_size 32 \
+  --lr 1e-4 \
+  --save_dir models/quality
+
+# 3. Run one-image inference
+python -m src.quality.infer \
+  --checkpoint models/quality/best_quality_model.pt \
+  --image data/images/example.jpg
+
+# 4. Run tests (includes quality tests)
+python -m pytest tests/ -v
+```
+
+## Training data format
+
+Each training and validation CSV row should include:
+
+* `image_path` — path to the image, relative to `--image_root`
+* `class_idx` — integer class label
+* `color_score` — 0 to 100
+* `size_score` — 0 to 100
+* `ripeness_score` — 0 to 100
+
+After training, the best model weights are saved as
+`models/quality/best_quality_model.pt`.
+
+## Integration notes
+
+For wider platform integration:
+
+* Each producer is keyed by `producer_id`, so many producers can use the same
+  deployment without mixing stock.
+* `process_inspection(...)` returns a plain record you can log to a file,
+  database, or event stream.
+* Suggested actions (`sell_normal`, `discount_10_20`,
+  `clearance_or_remove`, `manual_review`) can drive UI labels, shop rules, or
+  manual review queues.
+* Grade cut-offs live in `QualityThresholds`; you can change them without
+  retraining the image model.
+
+## Limitations and known issues (quality)
+
+* The CSV must already include the three quality scores; building those scores
+  from raw photos (or labels) is a separate step.
+* `class_idx` is only a number; a separate list of which number means which 
+  produce type should be kept.
+* Tests cover grading and inventory only; model metrics (e.g. accuracy, 
+  score error) should be added.
