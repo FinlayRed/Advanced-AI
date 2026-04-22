@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Generated artefacts (regenerable via `python -m src.demo`)
+data/*.csv
+data/*.joblib
+logs/*.jsonl
+reports/figures/*.png
