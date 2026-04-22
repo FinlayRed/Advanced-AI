@@ -164,7 +164,7 @@ generative AI use, every prompt and the resulting evaluation is recorded
 in `reports/genai_log.md`. See the technical report for the reflection on
 what worked and what didn't.
 
-# Quality inspection subsystem (Task 2)
+# Quality Inspection Subsystem (Task 2)
 
 This part of the project implements the AI-based quality inspection workflow
 for the Bristol Regional Food Network digital marketplace. It is one of the
