@@ -1,200 +1,283 @@
-# Bristol Regional Food Network
+# Bristol Regional Food Network AI Service
 
-# Recommendation, Quality, and Service Layer
+This repository contains the AI service and integration layer I implemented for
+the Bristol Regional Food Network project. My work focused on turning the model
+code into something the wider DESD platform could actually call, monitor, and
+swap at runtime.
 
-This repository implements the AI-based recommendation and re-order subsystem
-for the Bristol Regional Food Network digital marketplace. It is one of the
-four AI components of the wider group project for the *Advanced Artificial
-Intelligence* module (UFCFUR-15-3, 2025-26).
+The main things I implemented were:
 
-**Owners:** Sam (Task 1), Yas (Task 2), Finlay (Task 3/4 integration) · **Module:** Advanced AI · **Group project**
+* a Flask API around the recommendation and quality subsystems
+* a model registry with upload and activation workflows
+* explainable outputs for recommendation and quality responses
+* interaction logging for monitoring and future retraining
+* admin-facing summary endpoints for visibility into AI activity
+* tests for the service layer
 
----
+## What I implemented
 
-## What this repository does
+The service layer lives in `src/service/`.
 
-This repository now contains three connected pieces of the Bristol Regional
-Food Network AI submission:
+Main files:
 
-1. the Task 1 recommendation subsystem
-2. the Task 2 quality inspection subsystem
-3. the Task 3 service, model-loading, and XAI integration layer
+* `src/service/api.py` - HTTP API endpoints
+* `src/service/storage.py` - model registry and interaction log storage
+* `src/service/quality_runtime.py` - quality model runtime wrapper
+* `src/recommender.py` - recommendation explanations and service-facing wrapper
+* `src/quality/infer.py` - quality inference output normalisation
+* `tests/test_service_api.py` - service API tests
 
-For recommendations, given a customer's purchase history, the service produces
-two kinds of output that the marketplace UI can expose to end-users:
+The goal was to create a stable service boundary between this repo and the DESD
+web app. The DESD project calls this service over HTTP rather than importing
+machine learning code directly.
 
-| Endpoint | Purpose |
-|---|---|
-| `quick_reorder(customer_id, k)` | The customer's top-k recurring staples, ranked by how often *and* how recently they have bought them. Powers a one-tap "re-order favourites" button. |
-| `recommend_next_order(customer_id, k)` | Top-k personalised recommendations for the customer's next basket, optionally re-ranked for producer fairness. |
+## What the service does
 
-Both methods return a ranked list of `product_id`s (best first) that the UI
-or API layer can dereference against the product catalogue.
+The API exposes four main areas.
 
-For quality inspection, the service loads Yas' vision model checkpoint and
-returns a predicted class, confidence, quality score breakdown, threshold-based
-grade, and suggested stock action for a fruit or vegetable image.
+### 1. Health and runtime status
 
-## Architecture at a glance
-
-```
-                  ┌────────────────────────────────────────┐
-                  │     RecommendationService              │
-                  │     (the public interface)             │
-                  └────────┬──────────────────┬────────────┘
-                           │                  │
-              ┌────────────▼────┐    ┌────────▼─────────┐
-              │ FrequencyRecency│    │ NMFRecommender   │
-              │  Recommender    │    │ (sklearn NMF on  │
-              │  (baseline)     │    │  log-scaled      │
-              └─────────────────┘    │  user x item)    │
-                                     └──────────────────┘
-                           │                  │
-                           └────────┬─────────┘
-                                    │
-                  ┌─────────────────▼────────────────────┐
-                  │ rerank_for_producer_diversity()      │
-                  │ + FeedbackLogger (override capture)  │
-                  └──────────────────────────────────────┘
-```
-
-Two recommenders are kept side-by-side so the service can be A/B tested at
-runtime and so the technical report can compare a strong baseline against a
-proper machine-learning approach. The production wrapper adds producer
-fairness post-processing and override logging for monitoring.
-
-## Quick start
-
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 1b. Start the Task 3/4 integration service
-python -m src.service.api
-
-# 2. Run the end-to-end demo (generates data, trains both models,
-#    evaluates, demonstrates fairness + cold-start + feedback logging,
-#    saves the deployable .joblib artefact)
-python -m src.demo
-
-# 3. Run the test suite
-pytest tests/ -v
-
-# 4. Generate the charts used in the demo and the report
-python -m src.charts   # writes PNGs into reports/figures/
-```
-
-## Task 3 + 4 service layer
-
-Person 3's integration work lives in `src/service/`. It wraps the Task 1 and
-Task 2 subsystems in a simple Flask API that DESD can call over HTTP.
-
-Key features:
-
-* model registry with upload + activate workflow
-* bootstrap recommender model so the service starts with a valid artefact
-* checkpoint-based quality runtime for Yas' trained vision model
-* explainable responses for recommendations and quality inspections
-* append-only interaction logging for admin visibility and future retraining
-
-Main endpoints:
+This is used to confirm the service is alive and to show which models are
+currently active.
 
 * `GET /health`
+
+### 2. Model management
+
+This is the deployment workflow I added so a trained model can be exported
+offline, uploaded into the service, and activated without changing DESD.
+
 * `GET /models`
 * `POST /models/upload`
 * `POST /models/activate`
+
+Supported runtime types:
+
+* `recommendation_service` for recommender `.joblib` artefacts
+* `quality_checkpoint` for trained quality `.pt` checkpoints
+* `quality_heuristic` for the bootstrap fallback runtime
+
+### 3. Recommendation endpoints
+
+These are used by the DESD recommendation demo page and by direct API testing.
+
 * `POST /recommendations/quick-reorder`
 * `POST /recommendations/next-order`
 * `POST /recommendations/outcome`
+
+These responses include:
+
+* ranked `product_id`s
+* score and confidence
+* producer/category context
+* explanation text
+* reason codes
+* event IDs for outcome logging
+
+### 4. Quality and admin endpoints
+
+These are used by the DESD quality inspection UI and the manager monitoring
+page.
+
 * `POST /quality/inspect`
 * `GET /admin/overview`
 * `GET /admin/interactions`
 
-The service stores uploaded artefacts in `data/service_models/`, model metadata
-in `data/model_registry.json`, and interaction events in
-`logs/service_interactions.jsonl` at runtime. These files are generated locally
-and are ignored by git so the repository stays clean for hand-in and GitHub.
+Quality responses include:
 
-## Repository layout
+* predicted class label
+* confidence
+* color / size / ripeness breakdown
+* final `A/B/C` grade
+* action suggestion
+* explanation text
 
+## API structure
+
+### `GET /health`
+
+Typical response:
+
+```json
+{
+  "status": "ok",
+  "active_models": {
+    "recommender": {
+      "model_id": "...",
+      "model_type": "recommender",
+      "name": "bootstrap-recommender",
+      "version": "1.0",
+      "runtime": "recommendation_service",
+      "is_active": true
+    },
+    "quality": {
+      "model_id": "...",
+      "model_type": "quality",
+      "name": "yas-quality-model",
+      "version": "1.0",
+      "runtime": "quality_checkpoint",
+      "is_active": true
+    }
+  }
+}
 ```
-sam_recommender/
-├── src/
-│   ├── data_generator.py    Synthetic purchase log generator
-│   ├── baseline.py          Frequency × recency baseline
-│   ├── mf_model.py          NMF collaborative filtering
-│   ├── evaluation.py        Chronological split + ranking metrics
-│   ├── fairness.py          Producer-diversity re-ranker
-│   ├── feedback.py          Override / outcome JSONL logger
-│   ├── recommender.py       Public RecommendationService wrapper
-│   ├── demo.py              End-to-end demo script
-│   ├── charts.py            Matplotlib charts for demo + report
-│   ├── quality/             Task 2 training, inference, grading, inventory
-│   └── service/             Flask API, model registry, quality runtime
-├── tests/
-│   ├── test_recommender.py  Task 1 recommender tests
-│   ├── test_grading.py      Task 2 grading tests
-│   ├── test_inventory.py    Task 2 inventory tests
-│   └── test_service_api.py  Task 3 service tests
-├── data/                    Generated CSVs and runtime artefacts (gitignored)
-├── logs/                    Feedback and service logs (gitignored)
-├── reports/figures/         PNG charts for the report and demo
-├── requirements.txt
-└── README.md
+
+### `GET /models`
+
+Returns all registered models, including active and inactive versions.
+
+### `POST /models/upload`
+
+Form fields:
+
+* `model_type`
+* `runtime`
+* `name`
+* `version`
+* `activate`
+* `metadata`
+* `file`
+
+### `POST /models/activate`
+
+JSON body:
+
+```json
+{
+  "model_id": "abc123"
+}
 ```
 
-## Headline evaluation results
+### `POST /recommendations/next-order`
 
-Chronological 80/20 split on 800 synthetic customers, 43 products,
-~73,000 order lines (full numbers regenerable via `python -m src.demo`):
+JSON body:
 
-| Metric         | Baseline | NMF       |
-|----------------|----------|-----------|
-| Precision@5    | 0.547    | **0.618** |
-| Precision@10   | 0.495    | **0.576** |
-| Recall@10      | 0.436    | **0.508** |
-| NDCG@10        | 0.554    | **0.634** |
-| Hit Rate@10    | 0.984    | **0.994** |
+```json
+{
+  "customer_id": "C0001",
+  "k": 5,
+  "fairness": true
+}
+```
 
-NMF wins on every metric, with the largest gain on NDCG (the position-aware
-metric) — i.e. the NMF model is better at putting the right items at the
-*top* of the list, which is what matters for UI relevance.
+Typical response:
 
-## Integration notes
+```json
+{
+  "event_id": "rec-123",
+  "model": {
+    "name": "bootstrap-recommender",
+    "version": "1.0"
+  },
+  "recommendations": [
+    {
+      "product_id": "P0001",
+      "rank": 1,
+      "category": "Tomato",
+      "producer_id": "PR001",
+      "score": 0.92,
+      "confidence": 0.71,
+      "reason_text": "Recommended because similar customers repeatedly bought this item.",
+      "reason_codes": ["next_order", "nmf", "direct_rank"]
+    }
+  ]
+}
+```
 
-For the wider system integration owned by Finlay (Person C):
+### `POST /recommendations/quick-reorder`
 
-* The deployable recommendation artefact is a single `.joblib` file produced by
-  `RecommendationService.save(path)`. Load it with
-  `RecommendationService.load(path)` — no other state is needed.
-* The deployable quality artefact is the `best_quality_model.pt` checkpoint
-  produced by `python -m src.quality.train`.
-* The two public methods (`quick_reorder`, `recommend_next_order`) are the
-  stable contract. Their signatures will not change between training runs,
-  even when the underlying model is swapped.
-* The feedback logger writes newline-delimited JSON to a configurable path.
-  In production this should be redirected to the platform's event database;
-  the format will not change.
-* The Task 3 "AI engineer uploads a new model" workflow is implemented by
-  retraining offline, exporting either the recommender `.joblib` or the
-  quality `.pt` checkpoint, then uploading and activating the artefact through
-  `/models/upload` and `/models/activate`.
+JSON body:
 
-## Example API usage
+```json
+{
+  "customer_id": "C0001",
+  "k": 3
+}
+```
 
-Start the service first:
+### `POST /recommendations/outcome`
+
+JSON body:
+
+```json
+{
+  "event_id": "rec-123",
+  "accepted": ["P0001", "P0002"],
+  "added_outside_recommendation": ["P0009"]
+}
+```
+
+This is what feeds monitoring and future retraining signals.
+
+### `POST /quality/inspect`
+
+Form fields:
+
+* `producer_id`
+* `product_type`
+* `quantity`
+* `image` or `image_path`
+
+Typical response:
+
+```json
+{
+  "model": {
+    "name": "yas-quality-model",
+    "version": "1.0"
+  },
+  "inspection": {
+    "predicted_class_label": "fresh",
+    "confidence": 0.84,
+    "quality": {
+      "color_score": 72.0,
+      "size_score": 86.0,
+      "ripeness_score": 83.0
+    },
+    "grade": "B",
+    "action": "sell_normal",
+    "reason_text": "Grade B because color below 75. Suggested action: sell normal."
+  }
+}
+```
+
+### `GET /admin/overview`
+
+Returns aggregate monitoring data such as:
+
+* active models
+* recommendation event counts
+* override rate
+* inspection counts
+* grade distribution
+* recent examples
+
+### `GET /admin/interactions`
+
+Optional query params:
+
+* `event_type`
+* `producer_id`
+* `limit`
+
+This returns recent raw interaction log entries.
+
+## How to use the API
+
+Start the service:
 
 ```bash
 python -m src.service.api
 ```
 
-Check health:
+### Quick smoke test
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:5050/health"
+Invoke-RestMethod -Uri "http://127.0.0.1:5050/models"
 ```
 
-Request next-order recommendations:
+### Recommendation request
 
 ```powershell
 Invoke-RestMethod `
@@ -204,17 +287,31 @@ Invoke-RestMethod `
   -Body '{"customer_id":"C0001","k":5,"fairness":true}'
 ```
 
-Request quick reorder:
+### Recommendation outcome logging
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://127.0.0.1:5050/recommendations/quick-reorder" `
+  -Uri "http://127.0.0.1:5050/recommendations/outcome" `
   -ContentType "application/json" `
-  -Body '{"customer_id":"C0001","k":3}'
+  -Body '{"event_id":"rec-123","accepted":["P0001"],"added_outside_recommendation":["P0009"]}'
 ```
 
-Upload and activate a trained quality checkpoint:
+### Quality inspection request
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:5050/quality/inspect" `
+  -Form @{
+    producer_id = "demo"
+    product_type = "Tomato"
+    quantity = "1"
+    image = Get-Item "C:\path\to\tomato.jpg"
+  }
+```
+
+### Upload and activate a trained quality model
 
 ```powershell
 Invoke-RestMethod `
@@ -231,163 +328,35 @@ Invoke-RestMethod `
   }
 ```
 
-## Design choices justified in the report
+### Query monitoring data
 
-* **Synthetic data over real data.** The case study explicitly permits
-  synthetic data and there is no real Bristol marketplace order log to
-  draw on. Synthetic data also lets us inject ground-truth seasonality and
-  producer-fairness scenarios that we can then verify the model exploits.
-* **NMF over deeper architectures.** Catalogue size is small (~50
-  products), so sequence models, two-tower neural networks, and graph
-  neural networks would overfit. NMF gives the best precision-per-parameter
-  on this scale and is interpretable.
-* **Chronological evaluation, not random split.** Random splits leak
-  future information and consistently overestimate recommender accuracy.
-  Time-based splits are the standard in the literature for this reason.
-* **Producer-fairness as a post-processing step, not a training
-  constraint.** Easier to tune, easier to ablate (the report shows the
-  impact with and without), and decouples fairness policy from model
-  retraining.
-
-## Limitations and known issues
-
-* The synthetic dataset is generated, not measured — the absolute metric
-  numbers are not directly comparable to public benchmarks. The
-  *relative* comparison between baseline and NMF is meaningful.
-* NMF must be re-fitted from scratch when new customers arrive. For the
-  scale of the Bristol marketplace this is fine (sub-second on a laptop)
-  but a production deployment should either warm-start or move to
-  incremental ALS.
-* Feedback log → retrain loop is not automated; only the data plumbing
-  exists. Out of scope for the assignment but documented in the report.
-* Runtime service state is local-only by design. Uploaded model artefacts,
-  service registry files, and interaction logs are generated at runtime and
-  should not be committed to the repository.
-
-## Generative AI usage
-
-In line with the module's expectation that students trial and report on
-generative AI use, every prompt and the resulting evaluation is recorded
-in `reports/genai_log.md`. See the technical report for the reflection on
-what worked and what didn't.
-
-# Quality Inspection Subsystem (Task 2)
-
-This part of the project implements the AI-based quality inspection workflow
-for the Bristol Regional Food Network digital marketplace. It is one of the
-four AI components of the wider group project for the *Advanced Artificial
-Intelligence* module (UFCFUR-15-3, 2025-26).
-
-**Owner:** Yas (Person B) · **Module:** Advanced AI · **Group project**
-
-This repository includes tools for producers to check the quality of fruit and
-vegetables. The `src/quality/` package scores produce quality, assigns grades
-(A, B, or C), updates each producer's inventory, and recommends a next action
-(e.g. sell normally, discount, clearance, or manual review).
-
-## What this subsystem does
-
-At **training** time, CSV rows supply image paths and target scores; at
-**inference**, the model predicts class and scores from the image alone, then
-rule-based grading assigns A/B/C. The main pieces are:
-
-| Component | Purpose |
-|---|---|
-| `assign_grade(color, size, ripeness)` | Grades each item (A, B, or C) using fixed thresholds. |
-| `ProducerInventory.process_inspection(...)` | Updates each producer's stock by grade & saves inspection records. |
-| `src.quality.train` | Trains the model to classify produce condition & predict quality scores. |
-| `src.quality.infer` | Checks one image & returns the predicted class, confidence, scores, & final grade. |
-
-The grading policy in `src/quality/grading.py` checks **C before B** (the
-stricter rule wins):
-
-* Grade `C` if **any** metric is below the C cut-offs (`color < 65`,
-  `size < 70`, `ripeness < 60`).
-* Else grade `B` if **any** metric is below the B cut-offs (`color < 75`,
-  `size < 80`, `ripeness < 70`).
-* Else grade `A`.
-
-## Architecture
-
-```
-            ┌──────────────────────────────────────────────┐
-            │             QualityNet (ResNet18)            │
-            │       class head + 3-score regression head   │
-            └───────────────────┬──────────────────────────┘
-                                │
-                ┌───────────────▼────────────────┐
-                │ quality_breakdown() + thresholds│
-                │ assign_grade() => A / B / C     │
-                └───────────────┬────────────────┘
-                                │
-                ┌───────────────▼─────────────────────────┐
-                │ ProducerInventory.process_inspection()   │
-                │ per-producer stock + action suggestion   │
-                └──────────────────────────────────────────┘
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:5050/admin/overview"
+Invoke-RestMethod -Uri "http://127.0.0.1:5050/admin/interactions?event_type=recommendation_shown&limit=10"
 ```
 
-Training uses labelled examples: the vision model predicts **class** and **three
-quality scores**; those scores are clipped to 0–100 at inference
-(`src/quality/infer.py`). The A/B/C grade always comes from the fixed rules in
-`assign_grade(...)` so outcomes stay easy to audit.
+## Runtime files and git hygiene
 
-## Quick start (quality pipeline)
+At runtime the service generates:
+
+* `data/model_registry.json`
+* `data/service_models/`
+* `logs/service_interactions.jsonl`
+
+These are local runtime artefacts and are intentionally ignored by git so the
+repository stays clean for GitHub and assessment hand-in.
+
+## Verification
+
+The service changes were verified with tests in this repo, including:
+
+* recommendation endpoint tests
+* quality inspection endpoint tests
+* model upload tests
+* service bootstrap tests
+
+Run the service tests with:
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Train the quality model
-python -m src.quality.train \
-  --train_csv data/quality_train.csv \
-  --val_csv data/quality_val.csv \
-  --image_root data/images \
-  --epochs 10 \
-  --batch_size 32 \
-  --lr 1e-4 \
-  --save_dir models/quality
-
-# 3. Run one-image inference
-python -m src.quality.infer \
-  --checkpoint models/quality/best_quality_model.pt \
-  --image data/images/example.jpg
-
-# 4. Run tests (includes quality tests)
-python -m pytest tests/ -v
+pytest tests/test_service_api.py -v
 ```
-
-## Training data format
-
-Each training and validation CSV row should include:
-
-* `image_path` — path to the image, relative to `--image_root`
-* `class_idx` — integer class label
-* `color_score` — 0 to 100
-* `size_score` — 0 to 100
-* `ripeness_score` — 0 to 100
-
-After training, the best model weights are saved as
-`models/quality/best_quality_model.pt`.
-
-## Integration notes
-
-For wider platform integration:
-
-* Each producer is keyed by `producer_id`, so many producers can use the same
-  deployment without mixing stock.
-* `process_inspection(...)` returns a plain record you can log to a file,
-  database, or event stream.
-* Suggested actions (`sell_normal`, `discount_10_20`,
-  `clearance_or_remove`, `manual_review`) can drive UI labels, shop rules, or
-  manual review queues.
-* Grade cut-offs live in `QualityThresholds`; you can change them without
-  retraining the image model.
-
-## Limitations and known issues (quality)
-
-* The CSV must already include the three quality scores; building those scores
-  from raw photos (or labels) is a separate step.
-* `class_idx` is only a number; a separate list of which number means which 
-  produce type should be kept.
-* Tests cover grading and inventory only; model metrics (e.g. accuracy, 
-  score error) should be added.
