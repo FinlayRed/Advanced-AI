@@ -12,6 +12,11 @@ import joblib
 
 from src.data_generator import generate
 from src.recommender import RecommendationService
+from src.service.quality_runtime import QualityRuntime
+
+
+DEFAULT_QUALITY_MODEL_PATH = Path(__file__).resolve().parents[2] / "best_quality_model.pt"
+DEFAULT_QUALITY_CLASS_NAMES = ["fresh", "rotten"]
 
 
 def utc_now_iso() -> str:
@@ -105,6 +110,28 @@ class ModelRegistry:
         self._write(payload)
         return record
 
+    @staticmethod
+    def _validate_runtime(model_type: str, runtime: str) -> None:
+        allowed_runtimes = {
+            "recommender": {"recommendation_service"},
+            "quality": {"quality_checkpoint"},
+        }
+        valid = allowed_runtimes.get(model_type)
+        if valid is None:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        if runtime not in valid:
+            allowed = ", ".join(sorted(valid))
+            raise ValueError(f"Unsupported runtime '{runtime}' for model_type '{model_type}'. Allowed: {allowed}.")
+
+    def _invalidate_runtime_cache(self, model_type: str) -> None:
+        model_ids = {
+            model["model_id"]
+            for model in self.list_models()
+            if model["model_type"] == model_type
+        }
+        for model_id in model_ids:
+            self._cache.pop(model_id, None)
+
     def register_existing(
         self,
         *,
@@ -116,6 +143,7 @@ class ModelRegistry:
         is_active: bool = False,
         metadata: dict | None = None,
     ) -> dict:
+        self._validate_runtime(model_type, runtime)
         source_file = Path(source_path) if source_path else None
         destination_rel_path = None
         if source_file is not None:
@@ -158,6 +186,7 @@ class ModelRegistry:
         metadata: dict | None = None,
         activate: bool = False,
     ) -> dict:
+        self._validate_runtime(model_type, runtime)
         model_id = uuid.uuid4().hex[:12]
         ext = Path(filename).suffix or ".bin"
         destination_dir = self.models_dir / model_type
@@ -189,6 +218,7 @@ class ModelRegistry:
                 model["is_active"] = False
                 model["activated_at"] = None
         self._write(payload)
+        self._invalidate_runtime_cache(model_type)
 
     def activate(self, model_id: str) -> dict:
         payload = self._read()
@@ -207,7 +237,7 @@ class ModelRegistry:
         target["is_active"] = True
         target["activated_at"] = utc_now_iso()
         self._write(payload)
-        self._cache.pop(target["model_type"], None)
+        self._invalidate_runtime_cache(target["model_type"])
         return target
 
     def load_active_runtime(self, model_type: str):
@@ -222,8 +252,12 @@ class ModelRegistry:
         absolute_path = None if not file_path else self.registry_path.parent / file_path
         if active["runtime"] == "recommendation_service":
             runtime = RecommendationService.load(absolute_path)
-        elif active["runtime"] in {"quality_checkpoint", "quality_heuristic"}:
-            runtime = active
+        elif active["runtime"] == "quality_checkpoint":
+            runtime = QualityRuntime(
+                runtime=active["runtime"],
+                file_path=absolute_path,
+                class_names=active.get("metadata", {}).get("class_names") or DEFAULT_QUALITY_CLASS_NAMES,
+            )
         else:
             raise RuntimeError(f"Unsupported runtime: {active['runtime']}")
         self._cache[active["model_id"]] = runtime
@@ -244,16 +278,25 @@ class ModelRegistry:
                 name="bootstrap-recommender",
                 version="1.0",
                 is_active=True,
-                metadata={"source": "synthetic bootstrap", "records": len(data["orders"])} ,
+                metadata={"source": "synthetic bootstrap", "records": len(data["orders"])},
             )
 
         if self.get_active_model("quality") is None:
+            if not DEFAULT_QUALITY_MODEL_PATH.exists():
+                raise FileNotFoundError(
+                    f"Default quality model not found at {DEFAULT_QUALITY_MODEL_PATH}. "
+                    "Place best_quality_model.pt at the repository root or upload a quality checkpoint."
+                )
             self.register_existing(
                 model_type="quality",
-                runtime="quality_heuristic",
-                source_path=None,
-                name="bootstrap-quality-heuristic",
+                runtime="quality_checkpoint",
+                source_path=DEFAULT_QUALITY_MODEL_PATH,
+                name="best-quality-model",
                 version="1.0",
                 is_active=True,
-                metadata={"class_names": ["fresh", "rotten"], "source": "image heuristics bootstrap"},
+                metadata={
+                    "class_names": DEFAULT_QUALITY_CLASS_NAMES,
+                    "source": "repository default checkpoint",
+                    "default_model_filename": DEFAULT_QUALITY_MODEL_PATH.name,
+                },
             )

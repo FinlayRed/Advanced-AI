@@ -10,7 +10,6 @@ from PIL import UnidentifiedImageError
 
 from src.quality.inventory import ProducerInventory
 from src.quality.grading import QualityThresholds
-from src.service.quality_runtime import QualityRuntime
 from src.service.storage import InteractionStore, ModelRegistry, utc_now_iso
 
 
@@ -64,16 +63,19 @@ def create_app(
         if file is None:
             return jsonify({"error": "file is required."}), 400
 
-        record = registry.upload_model(
-            file_obj=file.stream,
-            filename=file.filename or f"{model_type}.bin",
-            model_type=model_type,
-            name=name,
-            version=version,
-            runtime=runtime,
-            metadata=metadata,
-            activate=activate,
-        )
+        try:
+            record = registry.upload_model(
+                file_obj=file.stream,
+                filename=file.filename or f"{model_type}.bin",
+                model_type=model_type,
+                name=name,
+                version=version,
+                runtime=runtime,
+                metadata=metadata,
+                activate=activate,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         interaction_store.append(
             {
                 "event_id": f"model-upload-{uuid.uuid4().hex[:8]}",
@@ -187,8 +189,7 @@ def create_app(
         if not producer_id or not product_type:
             return jsonify({"error": "producer_id and product_type are required."}), 400
 
-        active, runtime_record = registry.load_active_runtime("quality")
-        runtime = _build_quality_runtime(registry, active, runtime_record)
+        active, runtime = registry.load_active_runtime("quality")
 
         image_path = payload.get("image_path")
         temp_path = None
@@ -321,21 +322,6 @@ def _model_summary(model: dict | None, *, full: bool = False) -> dict | None:
         summary["metadata"] = model.get("metadata", {})
         summary["file_path"] = model.get("file_path")
     return summary
-
-
-def _build_quality_runtime(registry: ModelRegistry, active: dict, runtime_record):
-    if isinstance(runtime_record, QualityRuntime):
-        return runtime_record
-    file_path = active.get("file_path")
-    runtime = QualityRuntime(
-        runtime=active["runtime"],
-        file_path=None if not file_path else registry.registry_path.parent / file_path,
-        class_names=active.get("metadata", {}).get("class_names"),
-    )
-    registry._cache[active["model_id"]] = runtime
-    return runtime
-
-
 def _rebuild_inventory(interactions: list[dict]) -> ProducerInventory:
     inventory = ProducerInventory()
     for record in interactions:

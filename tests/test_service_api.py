@@ -28,7 +28,8 @@ def test_health_endpoint_bootstraps_models(tmp_path):
     payload = response.get_json()
     assert payload["status"] == "ok"
     assert payload["active_models"]["recommender"]["name"] == "bootstrap-recommender"
-    assert payload["active_models"]["quality"]["name"] == "bootstrap-quality-heuristic"
+    assert payload["active_models"]["quality"]["name"] == "best-quality-model"
+    assert payload["active_models"]["quality"]["runtime"] == "quality_checkpoint"
 
 
 def test_recommendation_and_outcome_flow(tmp_path):
@@ -112,3 +113,26 @@ def test_model_upload_endpoint(tmp_path):
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["model"]["name"] == "uploaded-quality"
+
+
+def test_legacy_quality_heuristic_runtime_is_rejected(tmp_path):
+    app = create_app(
+        models_dir=str(tmp_path / "models"),
+        registry_path=str(tmp_path / "registry.json"),
+        interaction_log_path=str(tmp_path / "interactions.jsonl"),
+    )
+    client = app.test_client()
+
+    response = client.post(
+        "/models/upload",
+        data={
+            "model_type": "quality",
+            "runtime": "quality_heuristic",
+            "name": "legacy-quality",
+            "version": "1.0",
+            "file": (BytesIO(b"pretend checkpoint"), "quality.pt"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert "quality_checkpoint" in response.get_json()["error"]

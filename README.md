@@ -1,5 +1,18 @@
 # Bristol Regional Food Network AI Service
 
+## Run the API
+
+From the repository root:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m src.service.api
+```
+
+The API starts on `http://localhost:5050`.
+
 This repository contains the AI service and integration layer I implemented for
 the Bristol Regional Food Network project. My work focused on turning the model
 code into something the wider DESD platform could actually call, monitor, and
@@ -31,6 +44,10 @@ The goal was to create a stable service boundary between this repo and the DESD
 web app. The DESD project calls this service over HTTP rather than importing
 machine learning code directly.
 
+The default active quality model is now the repository checkpoint
+`best_quality_model.pt`. The old heuristic fallback path has been removed, so
+quality inspection always runs through a real checkpoint-backed model.
+
 ## What the service does
 
 The API exposes four main areas.
@@ -55,7 +72,6 @@ Supported runtime types:
 
 * `recommendation_service` for recommender `.joblib` artefacts
 * `quality_checkpoint` for trained quality `.pt` checkpoints
-* `quality_heuristic` for the bootstrap fallback runtime
 
 ### 3. Recommendation endpoints
 
@@ -113,7 +129,7 @@ Typical response:
     "quality": {
       "model_id": "...",
       "model_type": "quality",
-      "name": "yas-quality-model",
+      "name": "best-quality-model",
       "version": "1.0",
       "runtime": "quality_checkpoint",
       "is_active": true
