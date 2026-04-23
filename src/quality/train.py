@@ -26,6 +26,7 @@ class TrainConfig:
     reg_weight: float = 0.5
     num_classes: int = 2
     save_dir: str = "models/quality"
+    imagenet_normalize: bool = False
 
 
 class QualityNet(nn.Module):
@@ -90,8 +91,18 @@ def train(cfg: TrainConfig) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
-    train_ds = FruitVegDataset(csv_path=cfg.train_csv, image_root=cfg.image_root, split="train")
-    val_ds = FruitVegDataset(csv_path=cfg.val_csv, image_root=cfg.image_root, split="val")
+    train_ds = FruitVegDataset(
+        csv_path=cfg.train_csv,
+        image_root=cfg.image_root,
+        split="train",
+        imagenet_normalize=cfg.imagenet_normalize,
+    )
+    val_ds = FruitVegDataset(
+        csv_path=cfg.val_csv,
+        image_root=cfg.image_root,
+        split="val",
+        imagenet_normalize=cfg.imagenet_normalize,
+    )
 
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=2)
@@ -167,7 +178,12 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--cls_weight", type=float, default=1.0)
+    parser.add_argument("--reg_weight", type=float, default=0.5)
+    parser.add_argument("--num_classes", type=int, default=2)
     parser.add_argument("--save_dir", type=str, default="models/quality")
+    parser.add_argument("--imagenet_normalize", action="store_true")
     args = parser.parse_args()
 
     return TrainConfig(
@@ -177,7 +193,12 @@ def parse_args() -> TrainConfig:
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
+        weight_decay=args.weight_decay,
+        cls_weight=args.cls_weight,
+        reg_weight=args.reg_weight,
+        num_classes=args.num_classes,
         save_dir=args.save_dir,
+        imagenet_normalize=args.imagenet_normalize,
     )
 
 

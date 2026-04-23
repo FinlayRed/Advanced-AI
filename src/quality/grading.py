@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Literal
+
+
+Condition = Literal["healthy", "rotten"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,20 @@ def assign_grade(
         return "B"
 
     return "A"
+
+
+def condition_from_label(label: str) -> Condition:
+    """Normalize model class labels to the binary quality decision."""
+    normalized = label.strip().lower()
+    if "rotten" in normalized or "rot" in normalized or "spoiled" in normalized:
+        return "rotten"
+    if "healthy" in normalized or "fresh" in normalized:
+        return "healthy"
+    return "rotten"
+
+
+def grade_from_condition(condition: Condition) -> str:
+    return "A" if condition == "healthy" else "C"
 
 
 def quality_breakdown(color: float, size: float, ripeness: float) -> Dict[str, float]:

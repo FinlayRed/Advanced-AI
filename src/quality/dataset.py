@@ -10,6 +10,10 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
 @dataclass(frozen=True)
 class DatasetColumns:
     image_path: str = "image_path"
@@ -26,27 +30,28 @@ class FruitVegDataset(Dataset):
         image_root: str,
         split: str = "train",
         columns: DatasetColumns = DatasetColumns(),
+        imagenet_normalize: bool = False,
     ) -> None:
         self.df = pd.read_csv(csv_path)
         self.image_root = Path(image_root)
         self.columns = columns
 
         if split == "train":
-            self.transform = transforms.Compose(
-                [
-                    transforms.Resize((224, 224)),
-                    transforms.RandomHorizontalFlip(p=0.5),
-                    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-                    transforms.ToTensor(),
-                ]
-            )
+            transform_steps = [
+                transforms.Resize((224, 224)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                transforms.ToTensor(),
+            ]
         else:
-            self.transform = transforms.Compose(
-                [
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                ]
-            )
+            transform_steps = [
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+            ]
+
+        if imagenet_normalize:
+            transform_steps.append(transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD))
+        self.transform = transforms.Compose(transform_steps)
 
         self._validate_schema()
 

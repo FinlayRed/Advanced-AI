@@ -102,9 +102,10 @@ page.
 Quality responses include:
 
 * predicted class label
+* binary `condition` (`healthy` or `rotten`)
 * confidence
 * color / size / ripeness breakdown
-* final `A/B/C` grade
+* legacy `A/B/C` grade for older clients
 * action suggestion
 * explanation text
 
@@ -342,6 +343,32 @@ Invoke-RestMethod `
     metadata = '{"class_names":["fresh","rotten"]}'
     file = Get-Item "E:\path\to\best_quality_model.pt"
   }
+```
+
+### Retrain on Healthy/Rotten folders
+
+Build train/validation CSV files from folders such as `Apple__Healthy` and
+`Apple__Rotten`:
+
+```powershell
+python -m src.quality.build_dataset_csv `
+  --image_root "E:\Downloads\Fruit And Vegetable Diseases Dataset" `
+  --output_dir data
+```
+
+Train a binary classifier. The regression score head is ignored by setting
+`reg_weight` to `0`, so the decision comes from healthy vs rotten classification:
+
+```powershell
+python -m src.quality.train `
+  --train_csv data\quality_train.csv `
+  --val_csv data\quality_val.csv `
+  --image_root "E:\Downloads\Fruit And Vegetable Diseases Dataset" `
+  --epochs 20 `
+  --batch_size 32 `
+  --reg_weight 0 `
+  --imagenet_normalize `
+  --save_dir models\quality
 ```
 
 ### Query monitoring data

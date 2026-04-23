@@ -82,6 +82,8 @@ def test_quality_inspection_logs_breakdown(tmp_path):
     )
     assert response.status_code == 200
     payload = response.get_json()
+    assert payload["inspection"]["condition"] in {"healthy", "rotten"}
+    assert payload["inspection"]["decision_mode"] == "healthy_rotten"
     assert payload["inspection"]["grade"] in {"A", "B", "C"}
     assert "reason_text" in payload["inspection"]
     assert payload["inspection"]["action"]
@@ -89,6 +91,7 @@ def test_quality_inspection_logs_breakdown(tmp_path):
     interactions = client.get("/admin/interactions?event_type=quality_inspection&producer_id=producer-1")
     interactions_payload = interactions.get_json()
     assert len(interactions_payload["interactions"]) == 1
+    assert interactions_payload["interactions"][0]["condition"] in {"healthy", "rotten"}
 
 
 def test_model_upload_endpoint(tmp_path):

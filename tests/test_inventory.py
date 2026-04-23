@@ -55,3 +55,20 @@ def test_grade_b_with_high_stock_discounts():
     assert rec["grade"] == "B"
     assert rec["action"] == "discount_10_20"
 
+
+def test_condition_override_drives_grade_and_action():
+    inv = ProducerInventory()
+    rec = inv.process_inspection(
+        producer_id="p1",
+        product_type="tomato",
+        quantity=10,
+        color_score=10,
+        size_score=10,
+        ripeness_score=10,
+        model_confidence=0.95,
+        condition="healthy",
+    )
+    assert rec["condition"] == "healthy"
+    assert rec["grade"] == "A"
+    assert rec["action"] == "sell_normal"
+

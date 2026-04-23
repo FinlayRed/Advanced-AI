@@ -9,7 +9,6 @@ from flask import Flask, jsonify, request
 from PIL import UnidentifiedImageError
 
 from src.quality.inventory import ProducerInventory
-from src.quality.grading import QualityThresholds
 from src.service.storage import InteractionStore, ModelRegistry, utc_now_iso
 
 
@@ -216,6 +215,8 @@ def create_app(
                 size_score=inspection["quality"]["size_score"],
                 ripeness_score=inspection["quality"]["ripeness_score"],
                 model_confidence=inspection["confidence"],
+                condition=inspection["condition"],
+                grade_override=inspection["grade"],
             )
             interaction_store.append(
                 {
@@ -228,6 +229,7 @@ def create_app(
                     "model_name": active["name"],
                     "model_version": active["version"],
                     "predicted_class_label": inspection["predicted_class_label"],
+                    "condition": inspection["condition"],
                     "confidence": inspection["confidence"],
                     "quality": inspection["quality"],
                     "grade": record["grade"],
@@ -242,11 +244,8 @@ def create_app(
                     "product_type": product_type,
                     "quantity": quantity,
                     "action": record["action"],
-                    "reason_text": _quality_reason_text(inspection["quality"], record["grade"], record["action"]),
-                    "thresholds": {
-                        "grade_b": {"color": 75, "size": 80, "ripeness": 70},
-                        "grade_c": {"color": 65, "size": 70, "ripeness": 60},
-                    },
+                    "reason_text": _quality_reason_text(inspection, record["action"]),
+                    "decision_mode": "healthy_rotten",
                 },
             }
             return jsonify(response)
@@ -286,6 +285,7 @@ def create_app(
                     "quality_inspections": len(quality_events),
                     "manual_review_cases": len(manual_review),
                     "low_confidence_cases": len(low_confidence),
+                    "condition_distribution": _count_by_key(quality_events, "condition"),
                     "grade_distribution": _count_by_key(quality_events, "grade"),
                 },
                 "recent_examples": {
@@ -331,10 +331,12 @@ def _rebuild_inventory(interactions: list[dict]) -> ProducerInventory:
             producer_id=record["producer_id"],
             product_type=record["product_type"],
             quantity=int(record.get("quantity", 1)),
-            color_score=float(record["quality"]["color_score"]),
-            size_score=float(record["quality"]["size_score"]),
-            ripeness_score=float(record["quality"]["ripeness_score"]),
-            model_confidence=float(record.get("confidence", 0.0)),
+                color_score=float(record["quality"]["color_score"]),
+                size_score=float(record["quality"]["size_score"]),
+                ripeness_score=float(record["quality"]["ripeness_score"]),
+                model_confidence=float(record.get("confidence", 0.0)),
+                condition=record.get("condition"),
+                grade_override=record.get("grade"),
         )
     return inventory
 
@@ -347,30 +349,13 @@ def _count_by_key(records: list[dict], key: str) -> dict[str, int]:
     return counts
 
 
-def _quality_reason_text(quality: dict, grade: str, action: str) -> str:
-    thresholds = QualityThresholds()
-    color = float(quality["color_score"])
-    size = float(quality["size_score"])
-    ripeness = float(quality["ripeness_score"])
-    if grade == "C":
-        trigger = []
-        if color < thresholds.color_c:
-            trigger.append(f"color below {thresholds.color_c:.0f}")
-        if size < thresholds.size_c:
-            trigger.append(f"size below {thresholds.size_c:.0f}")
-        if ripeness < thresholds.ripeness_c:
-            trigger.append(f"ripeness below {thresholds.ripeness_c:.0f}")
-        return f"Grade C because {', '.join(trigger)}. Suggested action: {action.replace('_', ' ')}."
-    if grade == "B":
-        trigger = []
-        if color < thresholds.color_b:
-            trigger.append(f"color below {thresholds.color_b:.0f}")
-        if size < thresholds.size_b:
-            trigger.append(f"size below {thresholds.size_b:.0f}")
-        if ripeness < thresholds.ripeness_b:
-            trigger.append(f"ripeness below {thresholds.ripeness_b:.0f}")
-        return f"Grade B because {', '.join(trigger)}. Suggested action: {action.replace('_', ' ')}."
-    return f"Grade A because color, size, and ripeness all cleared the threshold rules. Suggested action: {action.replace('_', ' ')}."
+def _quality_reason_text(inspection: dict, action: str) -> str:
+    condition = str(inspection.get("condition", "unknown"))
+    confidence = float(inspection.get("confidence", 0.0)) * 100
+    return (
+        f"Classified as {condition} with {confidence:.0f}% confidence. "
+        f"Suggested action: {action.replace('_', ' ')}."
+    )
 
 
 def _parse_metadata(raw_metadata) -> dict:

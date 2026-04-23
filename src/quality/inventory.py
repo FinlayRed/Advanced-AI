@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Literal, TypedDict
 
-from .grading import assign_grade
+from .grading import Condition, assign_grade, grade_from_condition
 
 
 ActionType = Literal[
@@ -22,6 +22,7 @@ class InspectionRecord(TypedDict):
     color_score: float
     size_score: float
     ripeness_score: float
+    condition: str
     grade: str
     model_confidence: float
     timestamp: str
@@ -45,9 +46,15 @@ class ProducerInventory:
         ripeness_score: float,
         model_confidence: float,
         surplus_threshold: int = 100,
+        condition: Condition | None = None,
+        grade_override: str | None = None,
     ) -> InspectionRecord:
         """Ingest one inspection event and update stock."""
-        grade = assign_grade(color_score, size_score, ripeness_score)
+        grade = grade_override or (
+            grade_from_condition(condition)
+            if condition is not None
+            else assign_grade(color_score, size_score, ripeness_score)
+        )
 
         self.inventory.setdefault(producer_id, {})
         self.inventory[producer_id].setdefault(product_type, {"A": 0, "B": 0, "C": 0})
@@ -68,6 +75,7 @@ class ProducerInventory:
             "color_score": float(color_score),
             "size_score": float(size_score),
             "ripeness_score": float(ripeness_score),
+            "condition": condition or ("healthy" if grade in {"A", "B"} else "rotten"),
             "grade": grade,
             "model_confidence": float(model_confidence),
             "timestamp": datetime.now(timezone.utc).isoformat(),

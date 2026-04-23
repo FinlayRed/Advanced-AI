@@ -8,7 +8,8 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from .grading import assign_grade, quality_breakdown
+from .grading import condition_from_label, grade_from_condition, quality_breakdown
+from .dataset import IMAGENET_MEAN, IMAGENET_STD
 from .train import QualityNet
 
 
@@ -19,18 +20,20 @@ def load_model(checkpoint_path: str, device: torch.device) -> QualityNet:
 
     model = QualityNet(num_classes=num_classes).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
+    model.inference_config = config
     model.eval()
     return model
 
 
-def preprocess_image(image_path: str) -> torch.Tensor:
+def preprocess_image(image_path: str, *, imagenet_normalize: bool = False) -> torch.Tensor:
     image = Image.open(image_path).convert("RGB")
-    transform = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-        ]
-    )
+    transform_steps = [
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+    ]
+    if imagenet_normalize:
+        transform_steps.append(transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD))
+    transform = transforms.Compose(transform_steps)
     tensor = transform(image)
     return tensor.unsqueeze(0)
 
@@ -51,7 +54,11 @@ def predict_with_model(
     class_names: Sequence[str] | None = None,
 ) -> dict:
     """Predict class, quality scores, and final grade using a loaded model."""
-    image_batch = preprocess_image(image_path).to(device)
+    config = getattr(model, "inference_config", {})
+    image_batch = preprocess_image(
+        image_path,
+        imagenet_normalize=bool(config.get("imagenet_normalize", False)),
+    ).to(device)
 
     with torch.no_grad():
         logits, raw_scores = model(image_batch)
@@ -64,12 +71,15 @@ def predict_with_model(
         size = float(min(max(scores[1], 0.0), 100.0))
         ripeness = float(min(max(scores[2], 0.0), 100.0))
 
-    grade = assign_grade(color=color, size=size, ripeness=ripeness)
+    predicted_class_label = class_name_for_index(predicted_class_idx, class_names)
+    condition = condition_from_label(predicted_class_label)
+    grade = grade_from_condition(condition)
 
     return {
         "image_path": str(Path(image_path)),
         "predicted_class_idx": predicted_class_idx,
-        "predicted_class_label": class_name_for_index(predicted_class_idx, class_names),
+        "predicted_class_label": predicted_class_label,
+        "condition": condition,
         "confidence": round(confidence, 4),
         "quality": quality_breakdown(color=color, size=size, ripeness=ripeness),
         "grade": grade,
