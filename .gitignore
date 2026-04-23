@@ -11,5 +11,7 @@ venv/
 # Generated artefacts (regenerable via `python -m src.demo`)
 data/*.csv
 data/*.joblib
+data/model_registry.json
+data/service_models/
 logs/*.jsonl
 reports/figures/*.png

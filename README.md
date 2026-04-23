@@ -1,20 +1,27 @@
-# Bristol Regional Food Network 
+# Bristol Regional Food Network
 
-# Recommendation Subsystem (Task 1)
+# Recommendation, Quality, and Service Layer
 
 This repository implements the AI-based recommendation and re-order subsystem
 for the Bristol Regional Food Network digital marketplace. It is one of the
 four AI components of the wider group project for the *Advanced Artificial
 Intelligence* module (UFCFUR-15-3, 2025-26).
 
-**Owner:** Sam (Person A) · **Module:** Advanced AI · **Group project**
+**Owners:** Sam (Task 1), Yas (Task 2), Finlay (Task 3/4 integration) · **Module:** Advanced AI · **Group project**
 
 ---
 
-## What this subsystem does
+## What this repository does
 
-Given a customer's purchase history, the service produces two kinds of
-recommendation that the marketplace UI exposes to end-users:
+This repository now contains three connected pieces of the Bristol Regional
+Food Network AI submission:
+
+1. the Task 1 recommendation subsystem
+2. the Task 2 quality inspection subsystem
+3. the Task 3 service, model-loading, and XAI integration layer
+
+For recommendations, given a customer's purchase history, the service produces
+two kinds of output that the marketplace UI can expose to end-users:
 
 | Endpoint | Purpose |
 |---|---|
@@ -23,6 +30,10 @@ recommendation that the marketplace UI exposes to end-users:
 
 Both methods return a ranked list of `product_id`s (best first) that the UI
 or API layer can dereference against the product catalogue.
+
+For quality inspection, the service loads Yas' vision model checkpoint and
+returns a predicted class, confidence, quality score breakdown, threshold-based
+grade, and suggested stock action for a fruit or vegetable image.
 
 ## Architecture at a glance
 
@@ -58,6 +69,9 @@ fairness post-processing and override logging for monitoring.
 # 1. Install dependencies
 pip install -r requirements.txt
 
+# 1b. Start the Task 3/4 integration service
+python -m src.service.api
+
 # 2. Run the end-to-end demo (generates data, trains both models,
 #    evaluates, demonstrates fairness + cold-start + feedback logging,
 #    saves the deployable .joblib artefact)
@@ -69,6 +83,37 @@ pytest tests/ -v
 # 4. Generate the charts used in the demo and the report
 python -m src.charts   # writes PNGs into reports/figures/
 ```
+
+## Task 3 + 4 service layer
+
+Person 3's integration work lives in `src/service/`. It wraps the Task 1 and
+Task 2 subsystems in a simple Flask API that DESD can call over HTTP.
+
+Key features:
+
+* model registry with upload + activate workflow
+* bootstrap recommender model so the service starts with a valid artefact
+* checkpoint-based quality runtime for Yas' trained vision model
+* explainable responses for recommendations and quality inspections
+* append-only interaction logging for admin visibility and future retraining
+
+Main endpoints:
+
+* `GET /health`
+* `GET /models`
+* `POST /models/upload`
+* `POST /models/activate`
+* `POST /recommendations/quick-reorder`
+* `POST /recommendations/next-order`
+* `POST /recommendations/outcome`
+* `POST /quality/inspect`
+* `GET /admin/overview`
+* `GET /admin/interactions`
+
+The service stores uploaded artefacts in `data/service_models/`, model metadata
+in `data/model_registry.json`, and interaction events in
+`logs/service_interactions.jsonl` at runtime. These files are generated locally
+and are ignored by git so the repository stays clean for hand-in and GitHub.
 
 ## Repository layout
 
@@ -83,11 +128,16 @@ sam_recommender/
 │   ├── feedback.py          Override / outcome JSONL logger
 │   ├── recommender.py       Public RecommendationService wrapper
 │   ├── demo.py              End-to-end demo script
-│   └── charts.py            Matplotlib charts for demo + report
+│   ├── charts.py            Matplotlib charts for demo + report
+│   ├── quality/             Task 2 training, inference, grading, inventory
+│   └── service/             Flask API, model registry, quality runtime
 ├── tests/
-│   └── test_recommender.py  Smoke tests (run in < 5 s)
-├── data/                    Generated CSVs + saved .joblib artefact
-├── logs/                    Feedback JSONL log
+│   ├── test_recommender.py  Task 1 recommender tests
+│   ├── test_grading.py      Task 2 grading tests
+│   ├── test_inventory.py    Task 2 inventory tests
+│   └── test_service_api.py  Task 3 service tests
+├── data/                    Generated CSVs and runtime artefacts (gitignored)
+├── logs/                    Feedback and service logs (gitignored)
 ├── reports/figures/         PNG charts for the report and demo
 ├── requirements.txt
 └── README.md
@@ -114,18 +164,72 @@ metric) — i.e. the NMF model is better at putting the right items at the
 
 For the wider system integration owned by Finlay (Person C):
 
-* The deployable artefact is a single `.joblib` file produced by
+* The deployable recommendation artefact is a single `.joblib` file produced by
   `RecommendationService.save(path)`. Load it with
   `RecommendationService.load(path)` — no other state is needed.
+* The deployable quality artefact is the `best_quality_model.pt` checkpoint
+  produced by `python -m src.quality.train`.
 * The two public methods (`quick_reorder`, `recommend_next_order`) are the
   stable contract. Their signatures will not change between training runs,
   even when the underlying model is swapped.
 * The feedback logger writes newline-delimited JSON to a configurable path.
   In production this should be redirected to the platform's event database;
   the format will not change.
-* The Task 3 "AI engineer uploads a new model" workflow is implemented
-  by retraining offline (`service.fit(new_orders)`), saving the
-  `.joblib`, and dropping it into the deployment directory.
+* The Task 3 "AI engineer uploads a new model" workflow is implemented by
+  retraining offline, exporting either the recommender `.joblib` or the
+  quality `.pt` checkpoint, then uploading and activating the artefact through
+  `/models/upload` and `/models/activate`.
+
+## Example API usage
+
+Start the service first:
+
+```bash
+python -m src.service.api
+```
+
+Check health:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:5050/health"
+```
+
+Request next-order recommendations:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:5050/recommendations/next-order" `
+  -ContentType "application/json" `
+  -Body '{"customer_id":"C0001","k":5,"fairness":true}'
+```
+
+Request quick reorder:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:5050/recommendations/quick-reorder" `
+  -ContentType "application/json" `
+  -Body '{"customer_id":"C0001","k":3}'
+```
+
+Upload and activate a trained quality checkpoint:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:5050/models/upload" `
+  -Form @{
+    model_type = "quality"
+    runtime = "quality_checkpoint"
+    name = "yas-quality-model"
+    version = "1.0"
+    activate = "true"
+    metadata = '{"class_names":["fresh","rotten"]}'
+    file = Get-Item "E:\path\to\best_quality_model.pt"
+  }
+```
 
 ## Design choices justified in the report
 
@@ -156,6 +260,9 @@ For the wider system integration owned by Finlay (Person C):
   incremental ALS.
 * Feedback log → retrain loop is not automated; only the data plumbing
   exists. Out of scope for the assignment but documented in the report.
+* Runtime service state is local-only by design. Uploaded model artefacts,
+  service registry files, and interaction logs are generated at runtime and
+  should not be committed to the repository.
 
 ## Generative AI usage
 

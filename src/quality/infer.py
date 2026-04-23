@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Sequence
 
 import torch
 from PIL import Image
@@ -34,10 +35,22 @@ def preprocess_image(image_path: str) -> torch.Tensor:
     return tensor.unsqueeze(0)
 
 
-def predict(checkpoint_path: str, image_path: str) -> dict:
-    """Predict class, quality scores, and final grade for one image."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = load_model(checkpoint_path, device=device)
+def class_name_for_index(predicted_class_idx: int, class_names: Sequence[str] | None = None) -> str:
+    if class_names and 0 <= predicted_class_idx < len(class_names):
+        return str(class_names[predicted_class_idx])
+    default_names = ["fresh", "rotten"]
+    if 0 <= predicted_class_idx < len(default_names):
+        return default_names[predicted_class_idx]
+    return f"class_{predicted_class_idx}"
+
+
+def predict_with_model(
+    model: QualityNet,
+    image_path: str,
+    device: torch.device,
+    class_names: Sequence[str] | None = None,
+) -> dict:
+    """Predict class, quality scores, and final grade using a loaded model."""
     image_batch = preprocess_image(image_path).to(device)
 
     with torch.no_grad():
@@ -56,10 +69,27 @@ def predict(checkpoint_path: str, image_path: str) -> dict:
     return {
         "image_path": str(Path(image_path)),
         "predicted_class_idx": predicted_class_idx,
+        "predicted_class_label": class_name_for_index(predicted_class_idx, class_names),
         "confidence": round(confidence, 4),
         "quality": quality_breakdown(color=color, size=size, ripeness=ripeness),
         "grade": grade,
     }
+
+
+def predict(
+    checkpoint_path: str,
+    image_path: str,
+    class_names: Sequence[str] | None = None,
+) -> dict:
+    """Predict class, quality scores, and final grade for one image."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_model(checkpoint_path, device=device)
+    return predict_with_model(
+        model=model,
+        image_path=image_path,
+        device=device,
+        class_names=class_names,
+    )
 
 
 def main() -> None:
