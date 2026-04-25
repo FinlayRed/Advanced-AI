@@ -1,300 +1,168 @@
 # Bristol Regional Food Network AI Service
 
-## Run the API
+This repository contains the AI service for the Bristol Regional Food Network project. It combines three pieces of work into one deployable Python service:
+
+- a product recommendation subsystem for quick reorders and next-order suggestions
+- a fruit and vegetable quality inspection model backed by a trained PyTorch checkpoint
+- a Flask API that exposes both subsystems to the wider DESD platform
+
+This is designed to be run as a local service. Client applications call the API over HTTP instead of importing model code directly.
+
+## Features
+
+### Recommendation Service
+
+- Generates quick-reorder recommendations from customer purchase history.
+- Generates next-order recommendations using collaborative filtering and a frequency-recency baseline.
+- Applies producer-diversity re-ranking so recommendations do not over-concentrate on one producer.
+- Returns explainable recommendation payloads with scores, confidence values, reason text, and reason codes.
+- Records recommendation outcomes so future retraining can use accepted items and user overrides.
+
+### Quality Inspection
+
+- Loads the included `best_quality_model.pt` checkpoint by default.
+- Classifies uploaded produce images as healthy or rotten.
+- Returns confidence, condition, quality breakdown, legacy grade, recommended action, and explanation text.
+- Tracks inspections by producer and product type for admin monitoring.
+
+### API And Monitoring
+
+- Provides health, model registry, recommendation, inspection, and admin endpoints.
+- Supports uploading and activating new model artifacts at runtime.
+- Writes local interaction logs for monitoring and future retraining.
+- Keeps generated runtime artifacts out of git.
+
+## Repository Structure
+
+```text
+.
+├── best_quality_model.pt          # Default trained quality checkpoint
+├── data/                          # Runtime data directory, kept with .gitkeep
+├── logs/                          # Runtime log directory, kept with .gitkeep
+├── requirements.txt               # Python dependencies
+├── src/
+│   ├── baseline.py                # Frequency-recency recommender
+│   ├── charts.py                  # Reporting/chart helpers
+│   ├── data_generator.py          # Synthetic purchase data generation
+│   ├── demo.py                    # End-to-end recommender demo
+│   ├── evaluation.py              # Recommendation evaluation metrics
+│   ├── fairness.py                # Producer-diversity re-ranking
+│   ├── feedback.py                # Recommendation feedback logging
+│   ├── mf_model.py                # Matrix-factorisation recommender
+│   ├── recommender.py             # Service-facing recommender wrapper
+│   ├── quality/                   # Quality model training and inference
+│   └── service/                   # Flask API, model registry, runtime storage
+└── tests/                         # Pytest test suite
+```
+
+## Requirements
+
+- Python 3.10-3.12 recommended
+- pip
+- The packages listed in `requirements.txt`
+
+The main dependencies are Flask, PyTorch, torchvision, Pillow, pandas, NumPy, scikit-learn, joblib, matplotlib, and pytest. PyTorch wheels may not be available for every Python and platform combination, such as Python 3.13 on Windows ARM.
+
+## Setup
 
 From the repository root:
 
-```bash
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-python -m src.service.api
 ```
 
-The API starts on `http://localhost:5050`.
-
-This repository contains the AI service and integration layer I implemented for
-the Bristol Regional Food Network project. My work focused on turning the model
-code into something the wider DESD platform could actually call, monitor, and
-swap at runtime.
-
-The main things I implemented were:
-
-* a Flask API around the recommendation and quality subsystems
-* a model registry with upload and activation workflows
-* explainable outputs for recommendation and quality responses
-* interaction logging for monitoring and future retraining
-* admin-facing summary endpoints for visibility into AI activity
-* tests for the service layer
-
-## What I implemented
-
-The service layer lives in `src/service/`.
-
-Main files:
-
-* `src/service/api.py` - HTTP API endpoints
-* `src/service/storage.py` - model registry and interaction log storage
-* `src/service/quality_runtime.py` - quality model runtime wrapper
-* `src/recommender.py` - recommendation explanations and service-facing wrapper
-* `src/quality/infer.py` - quality inference output normalisation
-* `tests/test_service_api.py` - service API tests
-
-The goal was to create a stable service boundary between this repo and the DESD
-web app. The DESD project calls this service over HTTP rather than importing
-machine learning code directly.
-
-The default active quality model is now the repository checkpoint
-`best_quality_model.pt`. The old heuristic fallback path has been removed, so
-quality inspection always runs through a real checkpoint-backed model.
-
-## What the service does
-
-The API exposes four main areas.
-
-### 1. Health and runtime status
-
-This is used to confirm the service is alive and to show which models are
-currently active.
-
-* `GET /health`
-
-### 2. Model management
-
-This is the deployment workflow I added so a trained model can be exported
-offline, uploaded into the service, and activated without changing DESD.
-
-* `GET /models`
-* `POST /models/upload`
-* `POST /models/activate`
-
-Supported runtime types:
-
-* `recommendation_service` for recommender `.joblib` artefacts
-* `quality_checkpoint` for trained quality `.pt` checkpoints
-
-### 3. Recommendation endpoints
-
-These are used by the DESD recommendation demo page and by direct API testing.
-
-* `POST /recommendations/quick-reorder`
-* `POST /recommendations/next-order`
-* `POST /recommendations/outcome`
-
-These responses include:
-
-* ranked `product_id`s
-* score and confidence
-* producer/category context
-* explanation text
-* reason codes
-* event IDs for outcome logging
-
-### 4. Quality and admin endpoints
-
-These are used by the DESD quality inspection UI and the manager monitoring
-page.
-
-* `POST /quality/inspect`
-* `GET /admin/overview`
-* `GET /admin/interactions`
-
-Quality responses include:
-
-* predicted class label
-* binary `condition` (`healthy` or `rotten`)
-* confidence
-* color / size / ripeness breakdown
-* legacy `A/B/C` grade for older clients
-* action suggestion
-* explanation text
-
-## API structure
-
-### `GET /health`
-
-Typical response:
-
-```json
-{
-  "status": "ok",
-  "active_models": {
-    "recommender": {
-      "model_id": "...",
-      "model_type": "recommender",
-      "name": "bootstrap-recommender",
-      "version": "1.0",
-      "runtime": "recommendation_service",
-      "is_active": true
-    },
-    "quality": {
-      "model_id": "...",
-      "model_type": "quality",
-      "name": "best-quality-model",
-      "version": "1.0",
-      "runtime": "quality_checkpoint",
-      "is_active": true
-    }
-  }
-}
-```
-
-### `GET /models`
-
-Returns all registered models, including active and inactive versions.
-
-### `POST /models/upload`
-
-Form fields:
-
-* `model_type`
-* `runtime`
-* `name`
-* `version`
-* `activate`
-* `metadata`
-* `file`
-
-### `POST /models/activate`
-
-JSON body:
-
-```json
-{
-  "model_id": "abc123"
-}
-```
-
-### `POST /recommendations/next-order`
-
-JSON body:
-
-```json
-{
-  "customer_id": "C0001",
-  "k": 5,
-  "fairness": true
-}
-```
-
-Typical response:
-
-```json
-{
-  "event_id": "rec-123",
-  "model": {
-    "name": "bootstrap-recommender",
-    "version": "1.0"
-  },
-  "recommendations": [
-    {
-      "product_id": "P0001",
-      "rank": 1,
-      "category": "Tomato",
-      "producer_id": "PR001",
-      "score": 0.92,
-      "confidence": 0.71,
-      "reason_text": "Recommended because similar customers repeatedly bought this item.",
-      "reason_codes": ["next_order", "nmf", "direct_rank"]
-    }
-  ]
-}
-```
-
-### `POST /recommendations/quick-reorder`
-
-JSON body:
-
-```json
-{
-  "customer_id": "C0001",
-  "k": 3
-}
-```
-
-### `POST /recommendations/outcome`
-
-JSON body:
-
-```json
-{
-  "event_id": "rec-123",
-  "accepted": ["P0001", "P0002"],
-  "added_outside_recommendation": ["P0009"]
-}
-```
-
-This is what feeds monitoring and future retraining signals.
-
-### `POST /quality/inspect`
-
-Form fields:
-
-* `producer_id`
-* `product_type`
-* `quantity`
-* `image` or `image_path`
-
-Typical response:
-
-```json
-{
-  "model": {
-    "name": "yas-quality-model",
-    "version": "1.0"
-  },
-  "inspection": {
-    "predicted_class_label": "fresh",
-    "confidence": 0.84,
-    "quality": {
-      "color_score": 72.0,
-      "size_score": 86.0,
-      "ripeness_score": 83.0
-    },
-    "grade": "B",
-    "action": "sell_normal",
-    "reason_text": "Grade B because color below 75. Suggested action: sell normal."
-  }
-}
-```
-
-### `GET /admin/overview`
-
-Returns aggregate monitoring data such as:
-
-* active models
-* recommendation event counts
-* override rate
-* inspection counts
-* grade distribution
-* recent examples
-
-### `GET /admin/interactions`
-
-Optional query params:
-
-* `event_type`
-* `producer_id`
-* `limit`
-
-This returns recent raw interaction log entries.
-
-## How to use the API
-
-Start the service:
+On macOS or Linux, activate the virtual environment with:
 
 ```bash
+source .venv/bin/activate
+```
+
+## Run The Tests
+
+Run the full test suite:
+
+```powershell
+pytest -v
+```
+
+Run only the service API tests:
+
+```powershell
+pytest tests/test_service_api.py -v
+```
+
+## Run The API
+
+Start the Flask service:
+
+```powershell
 python -m src.service.api
 ```
 
-### Quick smoke test
+The API starts on:
+
+```text
+http://localhost:5050
+```
+
+Check the service is running:
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:5050/health"
-Invoke-RestMethod -Uri "http://127.0.0.1:5050/models"
 ```
 
-### Recommendation request
+## API Endpoints
+
+### Health
+
+```http
+GET /health
+```
+
+Returns service status and the active recommender and quality models.
+
+### Model Registry
+
+```http
+GET /models
+POST /models/upload
+POST /models/activate
+```
+
+Supported runtime types:
+
+- `recommendation_service` for recommender `.joblib` artifacts
+- `quality_checkpoint` for quality model `.pt` checkpoints
+
+Example quality model upload:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://127.0.0.1:5050/models/upload" `
+  -Form @{
+    model_type = "quality"
+    runtime = "quality_checkpoint"
+    name = "quality-model"
+    version = "1.0"
+    activate = "true"
+    metadata = '{"class_names":["fresh","rotten"]}'
+    file = Get-Item "C:\path\to\model.pt"
+  }
+```
+
+### Recommendations
+
+```http
+POST /recommendations/quick-reorder
+POST /recommendations/next-order
+POST /recommendations/outcome
+```
+
+Example next-order request:
 
 ```powershell
 Invoke-RestMethod `
@@ -304,7 +172,7 @@ Invoke-RestMethod `
   -Body '{"customer_id":"C0001","k":5,"fairness":true}'
 ```
 
-### Recommendation outcome logging
+Example outcome logging request:
 
 ```powershell
 Invoke-RestMethod `
@@ -314,56 +182,79 @@ Invoke-RestMethod `
   -Body '{"event_id":"rec-123","accepted":["P0001"],"added_outside_recommendation":["P0009"]}'
 ```
 
-### Quality inspection request
+### Quality Inspection
+
+```http
+POST /quality/inspect
+```
+
+Example request with an uploaded image:
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://127.0.0.1:5050/quality/inspect" `
   -Form @{
-    producer_id = "demo"
+    producer_id = "producer-1"
     product_type = "Tomato"
-    quantity = "1"
+    quantity = "8"
     image = Get-Item "C:\path\to\tomato.jpg"
   }
 ```
 
-### Upload and activate a trained quality model
+Typical response fields include:
 
-```powershell
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:5050/models/upload" `
-  -Form @{
-    model_type = "quality"
-    runtime = "quality_checkpoint"
-    name = "yas-quality-model"
-    version = "1.0"
-    activate = "true"
-    metadata = '{"class_names":["fresh","rotten"]}'
-    file = Get-Item "E:\path\to\best_quality_model.pt"
-  }
+- predicted class label
+- healthy or rotten condition
+- confidence
+- color, size, and ripeness scores
+- A/B/C grade
+- suggested action
+- explanation text
+
+### Admin Monitoring
+
+```http
+GET /admin/overview
+GET /admin/interactions
 ```
 
-### Retrain on Healthy/Rotten folders
+Example requests:
 
-Build train/validation CSV files from folders such as `Apple__Healthy` and
-`Apple__Rotten`:
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:5050/admin/overview"
+Invoke-RestMethod -Uri "http://127.0.0.1:5050/admin/interactions?event_type=quality_inspection&limit=10"
+```
+
+## Recommender Demo
+
+Run the end-to-end recommender demo:
+
+```powershell
+python -m src.demo
+```
+
+The demo generates synthetic order data, trains recommendation models, evaluates them, demonstrates fairness re-ranking, logs feedback, and writes a deployable recommender artifact.
+
+Generated demo artifacts are ignored by git.
+
+## Quality Model Training
+
+Build train and validation CSV files from image folders:
 
 ```powershell
 python -m src.quality.build_dataset_csv `
-  --image_root "E:\Downloads\Fruit And Vegetable Diseases Dataset" `
+  --image_root "C:\path\to\Fruit And Vegetable Diseases Dataset" `
   --output_dir data
 ```
 
-Train a binary classifier. The regression score head is ignored by setting
-`reg_weight` to `0`, so the decision comes from healthy vs rotten classification:
+Train a binary quality classifier:
 
 ```powershell
 python -m src.quality.train `
   --train_csv data\quality_train.csv `
   --val_csv data\quality_val.csv `
-  --image_root "E:\Downloads\Fruit And Vegetable Diseases Dataset" `
+  --image_root "C:\path\to\Fruit And Vegetable Diseases Dataset" `
   --epochs 20 `
   --batch_size 32 `
   --reg_weight 0 `
@@ -371,35 +262,14 @@ python -m src.quality.train `
   --save_dir models\quality
 ```
 
-### Query monitoring data
+## Runtime Files
 
-```powershell
-Invoke-RestMethod -Uri "http://127.0.0.1:5050/admin/overview"
-Invoke-RestMethod -Uri "http://127.0.0.1:5050/admin/interactions?event_type=recommendation_shown&limit=10"
-```
+The service creates local runtime files when it starts and handles requests:
 
-## Runtime files and git hygiene
+- `data/model_registry.json`
+- `data/service_models/`
+- `logs/service_interactions.jsonl`
+- `logs/feedback.jsonl`
+- generated CSV, joblib, and chart artifacts from demos or training runs
 
-At runtime the service generates:
-
-* `data/model_registry.json`
-* `data/service_models/`
-* `logs/service_interactions.jsonl`
-
-These are local runtime artefacts and are intentionally ignored by git so the
-repository stays clean for GitHub and assessment hand-in.
-
-## Verification
-
-The service changes were verified with tests in this repo, including:
-
-* recommendation endpoint tests
-* quality inspection endpoint tests
-* model upload tests
-* service bootstrap tests
-
-Run the service tests with:
-
-```bash
-pytest tests/test_service_api.py -v
-```
+These files are intentionally ignored by git. The tracked `.gitkeep` files preserve the required `data/` and `logs/` directories.
